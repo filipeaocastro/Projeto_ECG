@@ -16,7 +16,7 @@ import wfdb
 import array as arr
 from scipy.signal import butter, lfilter, detrend, fftconvolve
 from detect_peaks import detect_peaks
-import dspplot
+#import dspplot
 
 
 def get_fft_values(y_values, T, N, f_s):
@@ -189,13 +189,17 @@ def detectPK(signal_filtered, diff, QRS_index):
         QRS_index[i, 1] = idx 
     return PKa, PKb, QRS_index[:, 1], QRS_index[:, 2]
 
-PKa, PKb, QRS_index[:, 1], QRS_index[:, 2] = detectPK(signal_filtered, diff, QRS_index)
+
         
 # Lê o sinal e as anotações
 sig_name = '100'
 signal, fs, T, n_samples = read_signal(sig_name, time = 100)
 ann = wfdb.rdann(sig_name, 'atr', sampto = n_samples)
-ann = np.array(ann)
+a = ann.symbol
+a1 = np.array( [ann.symbol, ann.sample])
+a1 = np.transpose(a1)
+a_idx = a1[:, 1].astype(int)
+a_sym = a1[:, 0].astype(str)
 
 # Define as frequências de corte do filtro
 lowcut = 0.5
@@ -220,7 +224,7 @@ signal_TEO_windowed = fftconvolve(signal_TEO, window, mode='same')
 th = np.mean(signal_TEO_windowed) + np.std(signal_TEO_windowed)
 
 # Detecta os picos R
-R_peaks_init = detect_peaks(signal_TEO_windowed, mph = th) - 1
+R_peaks_init = detect_peaks(signal_TEO_windowed, mph = th) #- 1
 
 # Faz a derivada do sinal
 diff = np.diff(signal_filtered)
@@ -229,10 +233,11 @@ diff_mean = np.mean(diff) - np.std(diff)
 # ******************* EXCLUIR ONDAS R QUE ESTEJAM A MENOS DE 0.5 s UMA DA OUTRA *******************
 R_peaks = []
 
-for i in range(0, len(R_peaks_init) - 1):
+for i in range(0, len(R_peaks_init) -1):
     dist = signal[R_peaks_init[i+1], 0] - signal[R_peaks_init[i], 0]
     if(dist >= 0.4):
         R_peaks.append(R_peaks_init[i])
+R_peaks.append(R_peaks_init[len(R_peaks_init) - 1])
         
 
 # Cria uma matriz vazia para armazenar os índices dos QRS e armazena as ondas R
@@ -240,7 +245,7 @@ QRS_index = np.zeros((len(R_peaks), 5), dtype = int)
 QRS_index[:, 2] = R_peaks[:]
 
 samples = int(fs * 0.150) # Pega o número de amostras em 150 ms
-
+'''
 # Cria vetores para armazenar o PKa e PKb
 PKa = np.zeros(len(R_peaks), dtype = int)
 PKb = np.zeros(len(R_peaks), dtype = int)
@@ -277,7 +282,10 @@ for i in range(0, len(QRS_index[:,2]) ):
         if signal_filtered[k] < signal_filtered[idx]:
             idx = k
     QRS_index[i, 1] = idx 
-        
+'''
+
+PKa, PKb, QRS_index[:, 1], QRS_index[:, 2] = detectPK(signal_filtered, diff, QRS_index)
+   
 # Fazer um loop para achar o primeiro ponto de mínimo antes e depois do Qp e Sp, respectivamente
 PKQ = np.zeros(len(QRS_index[:, 1]))
 count = 0
@@ -333,10 +341,33 @@ QRS_index[:, 4] = QRS_end - 1
 QRS_data = pd.DataFrame(data = QRS_index, columns = ['Q_onset', 'Q_peak', 'R_peak', 'S_peak', 'S_end'])
 
 
-QRS_times = np.zeros((len(R_peaks) - 1, 4), float)
- #Encontrando os intervalos Q-R
- for i in QRS_index[[1,:], 1]:
+QRS_times = np.zeros((len(R_peaks) - 1, 5), float)
 
+# Encontrando os intervalos Q-R
+for i, j, k in zip(QRS_index[1:, 2], QRS_index[1:, 1], range(0, len(QRS_index[1:, 2]))):
+    QRS_times[k, 0] = signal[i, 0] - signal[j, 0]
+    
+# Encontrando os intervalos Q-S
+for i, j, k in zip(QRS_index[1:, 3], QRS_index[1:, 1], range(0, len(QRS_index[1:, 2]))):
+    QRS_times[k, 1] = signal[i, 0] - signal[j, 0]
+    
+# Encontrando os intervalos R-R
+for i, j, k in zip(QRS_index[1:, 2], QRS_index[:-1, 2], range(0, len(QRS_index[1:, 2]))):
+    QRS_times[k, 2] = signal[i, 0] - signal[j, 0]
+
+# Encontrando os intervalos R-S
+for i, j, k in zip(QRS_index[1:, 2], QRS_index[1:, 3], range(0, len(QRS_index[1:, 2]))):
+    QRS_times[k, 3] = signal[i, 0] - signal[j, 0]
+
+# Encontrando o intervalo Q_onset - S_end
+for i, j, k in zip(QRS_index[1:, 0], QRS_index[1:, 4], range(0, len(QRS_index[1:, 2]))):
+    QRS_times[k, 4] = signal[i, 0] - signal[j, 0]
+    
+ann_sym = pd.DataFrame(data = np.transpose(a_sym[1:]), columns = ['Ann'])
+
+     
+QRS_timesData = pd.DataFrame(data = QRS_times, columns = ['Q-R', 'Q-S', 'R-R', 'R-S', 'QRS_len'])
+QRS_timesData = QRS_timesData.join(ann_sym)
 
 
 # *************** PLOTs **********************
@@ -435,8 +466,11 @@ plt.legend(loc='upper right')
 #   [X] Detectar os picos Q e S
 #   [X] Remover falsas ondas R
 #   [X] Detectar início e fim do QRS
-#   [ ] Medir o tempo entre Q-R
-#   [ ] Medir o tempo entre R-S
-#   [ ] Medir o tempo entre Q-S
-#   [ ] Medir o tempo entre R-R (anterior)
+#   [X] Medir o tempo entre Q-R
+#   [X] Medir o tempo entre R-S
+#   [X] Medir o tempo entre Q-S
+#   [X] Medir o tempo entre R-R (anterior)
+#   [X] Medir o tempo de início e fim do QRS
+# [ ] Pegar as anotações do sinal
 # [ ] Classificar
+# [ ] Analisar resultados
