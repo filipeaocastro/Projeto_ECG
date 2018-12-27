@@ -16,6 +16,7 @@ import wfdb
 import array as arr
 from scipy.signal import butter, lfilter, detrend, fftconvolve
 from detect_peaks import detect_peaks
+
 #import dspplot
 
 
@@ -109,7 +110,7 @@ def read_signal(name, time = 0): # Lê os aquivos do WFDB
     signal = np.transpose(signal, (1, 0))
     return signal, fs, T, n_samples
 
-def QRS_onset_end (diff, TH, millis, PK, length, onset = True):
+def QRS_onset_end (diff, TH, millis, PK, length, fs, onset = True):
     fdiff = diff.astype(float)
     time = fs * millis/1000
     time = int(time)
@@ -132,10 +133,8 @@ def QRS_onset_end (diff, TH, millis, PK, length, onset = True):
             sub1 = var[1] - j
             if onset:
                 cross = (sub0 >= 0 and sub1 < 0)
-                comp_dif = abs(sub0) < abs(sub1)
             else:
                 cross = (sub1 >= 0 and sub0 < 0)
-                comp_dif = abs(sub0) < abs(sub1)
             if cross:
                 if abs(sub0) < abs(sub1):
                     QRS_border[k] = idx0
@@ -150,7 +149,7 @@ def QRS_onset_end (diff, TH, millis, PK, length, onset = True):
     QRS_border = QRS_border.astype(int)
     return QRS_border
 
-def detectPK(signal_filtered, diff, QRS_index):
+def detectPK(signal_filtered, diff, QRS_index, fs, R_peaks):
     
     samples = int(fs * 0.150) # Pega o número de amostras em 150 ms
     # Cria vetores para armazenar o PKa e PKb
@@ -189,17 +188,304 @@ def detectPK(signal_filtered, diff, QRS_index):
         QRS_index[i, 1] = idx 
     return PKa, PKb, QRS_index[:, 1], QRS_index[:, 2]
 
+def firstAnn(QRS_index, a_idx):
+    
+    aux = 0
+    for i in range(0, len(QRS_index[:, 2])):
+        dif = abs(QRS_index[0, 2] - a_idx[i])
+        if(dif <= 5):
+            aux = i
+            break
+    return int(aux)
+
+def misDetect(QRS_index, a_idx):
+    
+    misdecs = 0         # Quantidade de misdetections
+    misdecs_idx = []    # Indexes de ondas R (nas anotações) não detectadas corretamente
+    discard = []        # Indexes do QRS_index que devem ser descartados
+    beat_num = []       # Vetor p/ armazenar o número de cada beat
+    first = firstAnn(QRS_index, a_idx)
+    a_idx1 = a_idx[first:]
+    idx_a = int(0)
+    i = int(0)
+    while i < len(QRS_index[:, 2]):
+        dif = abs(QRS_index[i, 2] - a_idx1[idx_a])
+        if(dif > 6):
+            misdecs += 1
+            misdecs_idx.append(int(idx_a))
+            if(correspond(QRS_index, a_idx1, i)):
+                i -= 1
+            else:
+                discard.append(int(i))
+        else:
+            beat_num.append(int(idx_a))
+        idx_a += 1
+        i += 1
+    return misdecs, misdecs_idx, discard, beat_num
+        
+def correspond(QRS_index, a_idx1, idx):
+    aux = 0
+    corr = False
+    for i in range(idx, len(a_idx1[:])):
+        dif = abs(QRS_index[idx, 2] - a_idx1[i])
+        if(dif <= 6):
+            aux += 1
+    if(aux > 0):
+        corr = True
+    return corr
+
+def classifica(sig_name):
+    
+    signal, fs, T, n_samples = read_signal(sig_name, time = 1800)
+    ann = wfdb.rdann(sig_name, 'atr', sampto = n_samples)
+    a = ann.symbol
+    a1 = np.array( [ann.symbol, ann.sample])
+    a1 = np.transpose(a1)
+    a_idx = a1[:, 1].astype(int)
+    a_sym = a1[:, 0].astype(str)
+    
+    x = []
+    for i in a_sym:
+        if i == '<':
+          x.append(i)  
+    
+    
+    # Define as frequências de corte do filtro
+    lowcut = 0.5
+    highcut = 50
+    
+    # Filtra o sinal
+    signal_filtered = butter_bandpass_filter(signal[:,1], lowcut, highcut, fs, order = 2)
+    signal_detrended = detrend(signal_filtered)
+    
+    # Faz o TEO do sinal ECG
+    signal_TEO = np.zeros(shape = len(signal_filtered))
+    for i in range(1, len(signal[:,1]) - 1):
+        signal_TEO[i] = np.power(signal_filtered[i], 2) - signal_filtered[i+1] * signal_filtered[i-1]
+    
+    # Cria a janela de Bartlett
+    window = np.bartlett(9)
+    
+    # Convolui o sinal TEO com a janela Bartlett
+    signal_TEO_windowed = fftconvolve(signal_TEO, window, mode='same')
+    
+    # Define o threshold de detecção de pico como média do sinal + desvio padrão
+    th = np.mean(signal_TEO_windowed) + np.std(signal_TEO_windowed)
+    
+    # Detecta os picos R
+    R_peaks_init = detect_peaks(signal_TEO_windowed, mph = th) #- 1
+    
+    # Faz a derivada do sinal
+    diff = np.diff(signal_filtered)
+    diff_mean = np.mean(diff) - np.std(diff)
+    
+    # ******************* EXCLUIR ONDAS R QUE ESTEJAM A MENOS DE 0.5 s UMA DA OUTRA *******************
+    R_peaks = []
+    
+    for i in range(0, len(R_peaks_init) -1):
+        dist = signal[R_peaks_init[i+1], 0] - signal[R_peaks_init[i], 0]
+        if(dist >= 0.4):
+            R_peaks.append(R_peaks_init[i])
+    R_peaks.append(R_peaks_init[len(R_peaks_init) - 1])
+            
+    
+    # Cria uma matriz vazia para armazenar os índices dos QRS e armazena as ondas R
+    QRS_index = np.zeros((len(R_peaks), 6), dtype = int)
+    QRS_index[:, 2] = R_peaks[:]
+    
+    samples = int(fs * 0.150) # Pega o número de amostras em 150 ms
+    
+    
+    PKa, PKb, QRS_index[:, 1], QRS_index[:, 2] = detectPK(signal_filtered, diff, QRS_index, fs, R_peaks)
+    QRS_index = np.delete(QRS_index, 0, 0)
+    QRS_index = np.delete(QRS_index, len(QRS_index[:, 1]) - 1, 0)
+    
+       
+    # Fazer um loop para achar o primeiro ponto de mínimo antes e depois do Qp e Sp, respectivamente
+    #aux = 0,06 ms
+    aux = int(fs * 0.5)
+    
+    N = 5
+    cumsum, movav_diff = [0], []
+    
+    for i, x in enumerate(diff, 1):
+        cumsum.append(cumsum[i-1] + x)
+        if i>=N:
+            moving_ave = (cumsum[i] - cumsum[i-N])/N
+            #can do stuff with moving_ave here
+            movav_diff.append(moving_ave)
+    
+    
+    PKQ = np.zeros(len(QRS_index[:, 1]))
+    count = 0
+    for i in QRS_index[:, 1]:
+        #aux = 20
+        PKQ_init = detect_peaks([4, 4, 4], valley = True)
+        i = i - N
+        #while PKQ_init.size == 0:
+        wdw_min = i - aux
+        PKQ_init = detect_peaks(movav_diff[wdw_min:i], valley = True)
+        #aux += 1
+        
+        PKQ[count] = PKQ_init[len(PKQ_init)-1] + i - aux
+        count += 1
+    
+    PKS = np.zeros(len(QRS_index[:, 3]))
+    count = 0    
+    for i in QRS_index[:, 3]:
+        #aux = 40
+        i = i-N
+        PKS_init = detect_peaks([4, 4, 4], valley = True)
+        wdw_max = i + aux
+        PKS_init = detect_peaks(movav_diff[i:wdw_max], valley = True)
+        PKS[count] = PKS_init[0] + i
+        count += 1
+        
+    # Definindo um Threshold de acordo com K
+    PKQ = PKQ.astype(int)
+    PKS = PKS.astype(int)
+    KQ = 0.94
+    KS = 0.995
+    fdiff = diff.astype(float)
+    THQ = np.zeros(len(QRS_index[:, 3]))
+    THS = np.zeros(len(QRS_index[:, 3]))
+    
+    if min(fdiff) < 0:
+        fdiff_positive = fdiff - min(fdiff)
+    for i, j in zip(PKQ, range(0, len(PKQ))):
+        num = fdiff_positive[i]
+        THQ[j] = num / KQ
+    for i, j in zip(PKS, range(0, len(PKS))):
+        num = fdiff_positive[i]
+        THS[j] = num / KS
+    if min(fdiff) < 0:
+        THQ = THQ + min(fdiff)
+        THS = THS + min(fdiff)
+        
+    # Verificando o ponto que cruza o Threshold
+    QRS_onset = QRS_onset_end (diff, THQ, 25, PKQ, len(QRS_index[:, 2]), fs, onset = True)
+    QRS_end = QRS_onset_end (diff, THS, 15, PKS, len(QRS_index[:, 2]), fs, onset = False)
+    
+    QRS_index[:, 0] = QRS_onset - 1
+    QRS_index[:, 4] = QRS_end - 1
+    
+    misDect, annMisDect_idx, discard, beat_num = misDetect(QRS_index, a_idx)
+    QRS_index = np.delete(QRS_index, discard, 0)
+    QRS_index[:, 5] = np.transpose(np.array(beat_num))
+    
+    QRS_data = pd.DataFrame(data = QRS_index, columns = ['Q_onset', 'Q_peak', 'R_peak', 'S_peak', 'S_end',
+                                                         'Beat_nº'])
+    
+    QRS_times = np.zeros((len(QRS_index[:, 2]), 8), float)
+    
+    # Encontrando os intervalos Q-R
+    for i, j, k in zip(QRS_index[:, 2], QRS_index[:, 1], range(0, len(QRS_index[:, 2]))):
+        QRS_times[k, 0] = signal[i, 0] - signal[j, 0]
+        
+    # Encontrando os intervalos Q-S
+    for i, j, k in zip(QRS_index[:, 3], QRS_index[:, 1], range(0, len(QRS_index[:, 2]))):
+        QRS_times[k, 1] = signal[i, 0] - signal[j, 0]
+        
+    # Encontrando os intervalos R-R
+    for i, j in zip(QRS_index[:, 2], range(0, len(QRS_index[:, 2]))):
+        if(j == 0):
+            QRS_times[j, 2] = signal[QRS_index[j+1, 2], 0] - signal[i, 0]
+            QRS_times[j, 2] /= QRS_index[j+1, 5] - QRS_index[j, 5]
+        else:  
+           QRS_times[j, 2] = signal[i, 0] - signal[QRS_index[j-1, 2], 0]
+           QRS_times[j, 2] /= QRS_index[j, 5] - QRS_index[j-1, 5]
+    
+    # Encontrando os intervalos R-S
+    for i, j, k in zip(QRS_index[:, 3], QRS_index[:, 2], range(0, len(QRS_index[:, 2]))):
+        QRS_times[k, 3] = signal[i, 0] - signal[j, 0]
+    
+    # Encontrando o intervalo Q_onset - S_end
+    for i, j, k in zip(QRS_index[:, 4], QRS_index[:, 0], range(0, len(QRS_index[:, 2]))):
+        QRS_times[k, 4] = signal[i, 0] - signal[j, 0]
+        
+    for i, j, k, l in zip(QRS_index[:, 1], QRS_index[:, 2], QRS_index[:, 3], range(0, len(QRS_index[:, 2]))):
+        QRS_times[l, 5] = signal_filtered[i]
+        QRS_times[l, 6] = signal_filtered[j]
+        QRS_times[l, 7] = signal_filtered[k]
+        
+    #ann_sym = pd.DataFrame(data = np.transpose(a_sym[1:]), columns = ['Ann'])
+    firstAnnIdx = firstAnn(QRS_index, a_idx)
+    ann_sym = a_sym[firstAnnIdx:-1]
+    ann_sym = np.delete(ann_sym, annMisDect_idx, 0)
+    ann_sym = pd.DataFrame(data = np.transpose(ann_sym), columns = ['Ann'])
+    ds_beat = pd.DataFrame(data = np.transpose(beat_num), columns = ['Beat_nº'])
+    vect = [2, 4, 6, 7]
+         
+    
+    #QRS_timesData = pd.DataFrame(data = QRS_times, columns = ['Q-R', 'Q-S', 'R-R', 'R-S', 'QRS_len', 'Q', 'R', 'S'])
+    QRS_timesData = pd.DataFrame(data = QRS_times[:, vect], columns = ['R-R', 'QRS_len', 'R', 'S'])
+    QRS_timesData = QRS_timesData.join(ann_sym)
+    QRS_timesData = QRS_timesData.join(ds_beat)
+    
+    
+    
+    
+    # ******************************* CLASSIFICATION ***************************
+    
+    X = QRS_timesData.iloc[:, 0:4].values
+    y = QRS_timesData.iloc[:, 4].values
+    
+    from sklearn.preprocessing import LabelEncoder
+    labelencoder_y = LabelEncoder()
+    y = labelencoder_y.fit_transform(y.astype(str))
+    
+    from sklearn.cross_validation import train_test_split
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.25, random_state = 0)
+    
+    # Feature Scaling
+    from sklearn.preprocessing import StandardScaler
+    sc = StandardScaler()
+    X_train = sc.fit_transform(X_train)
+    X_test = sc.transform(X_test)
+    
+    # Fitting the classifier to the Training set
+    from sklearn.svm import SVC
+    classifier = SVC(kernel = 'rbf')
+    classifier.fit(X_train, y_train)
+    score = classifier.score(X_test, y_test)
+    
+    # Predicting the Test set results
+    y_pred = classifier.predict(X_test)
+    
+    # Making the Confusion Matrix
+    from sklearn.metrics import confusion_matrix
+    cm = confusion_matrix(y_test, y_pred)
+    
+    from sklearn.metrics import accuracy_score
+    acc_s = accuracy_score(y_test, y_pred)
+    
+    from sklearn.metrics import classification_report
+    report = classification_report(y_test, y_pred)
+    
+    
+    return cm, acc_s, report
+
+
+
+
+#  ****************************** FAZER UM VETOR DE POSIÇÕES ÚTEIS DE ANOTAÇÕES *************************
+    
+
 
         
 # Lê o sinal e as anotações
-sig_name = '100'
-signal, fs, T, n_samples = read_signal(sig_name, time = 100)
+sig_name = '107'
+
+#cm, acc, rep = classifica(sig_name)
+
+signal, fs, T, n_samples = read_signal(sig_name, time = 1800)
 ann = wfdb.rdann(sig_name, 'atr', sampto = n_samples)
 a = ann.symbol
 a1 = np.array( [ann.symbol, ann.sample])
 a1 = np.transpose(a1)
 a_idx = a1[:, 1].astype(int)
 a_sym = a1[:, 0].astype(str)
+
 
 # Define as frequências de corte do filtro
 lowcut = 0.5
@@ -221,7 +507,10 @@ window = np.bartlett(9)
 signal_TEO_windowed = fftconvolve(signal_TEO, window, mode='same')
 
 # Define o threshold de detecção de pico como média do sinal + desvio padrão
-th = np.mean(signal_TEO_windowed) + np.std(signal_TEO_windowed)
+hist = np.histogram(signal_TEO_windowed)
+th = hist[1]
+th = th[2]
+#th = np.mean(signal_TEO_windowed) + np.std(signal_TEO_windowed)
 
 # Detecta os picos R
 R_peaks_init = detect_peaks(signal_TEO_windowed, mph = th) #- 1
@@ -233,68 +522,59 @@ diff_mean = np.mean(diff) - np.std(diff)
 # ******************* EXCLUIR ONDAS R QUE ESTEJAM A MENOS DE 0.5 s UMA DA OUTRA *******************
 R_peaks = []
 
-for i in range(0, len(R_peaks_init) -1):
-    dist = signal[R_peaks_init[i+1], 0] - signal[R_peaks_init[i], 0]
+i_aux = 0
+while i_aux < (len(R_peaks_init) -1):
+    dist = signal[R_peaks_init[i_aux+1], 0] - signal[R_peaks_init[i_aux], 0]
     if(dist >= 0.4):
-        R_peaks.append(R_peaks_init[i])
+        R_peaks.append(R_peaks_init[i_aux])
+    else:
+        sub = signal_TEO_windowed[R_peaks_init[i_aux]] - signal_TEO_windowed[R_peaks_init[i_aux+1]]
+        if sub > 0:
+            R_peaks.append(R_peaks_init[i_aux])
+        else:
+            R_peaks.append(R_peaks_init[i_aux+1])
+        i_aux += 1
+    i_aux += 1            
+        
 R_peaks.append(R_peaks_init[len(R_peaks_init) - 1])
         
 
 # Cria uma matriz vazia para armazenar os índices dos QRS e armazena as ondas R
-QRS_index = np.zeros((len(R_peaks), 5), dtype = int)
+QRS_index = np.zeros((len(R_peaks), 6), dtype = int)
 QRS_index[:, 2] = R_peaks[:]
 
 samples = int(fs * 0.150) # Pega o número de amostras em 150 ms
-'''
-# Cria vetores para armazenar o PKa e PKb
-PKa = np.zeros(len(R_peaks), dtype = int)
-PKb = np.zeros(len(R_peaks), dtype = int)
 
-# Preenche a metriz QRS_index, PKa e PKb
-for i in range(0, len(QRS_index[:,2]) ):
-    
-    for k in range(QRS_index[i, 2], QRS_index[i, 2] - samples, -1):        
-        pico = np.zeros(1)
-        pico = detect_peaks( (diff[k-2], diff[k-1], diff[k]) )
-        if pico != 0:
-            PKa[i] = k-1
-            break    
-    
-    for j in range(QRS_index[i, 2], QRS_index[i, 2] + samples):
-        pico = np.zeros(1)
-        pico = detect_peaks( (diff[j], diff[j+1], diff[j+2]) )
-        if pico != 0:
-            PKb[i] = j+1
-            break  
-        
-    idx = QRS_index[i, 2]
-    for j in range(PKb[i], QRS_index[i, 2] + samples, 1):
-        if(j >= len(signal_filtered)):
-            break
-        if signal_filtered[j] < signal_filtered[idx] :
-            idx = j
-    QRS_index[i, 3] = idx - 1
-        
-    idx = QRS_index[i, 2]
-    for k in range(PKa[i], QRS_index[i, 2] - samples, -1):
-        if(j >= len(signal_filtered)):
-            break
-        if signal_filtered[k] < signal_filtered[idx]:
-            idx = k
-    QRS_index[i, 1] = idx 
-'''
 
-PKa, PKb, QRS_index[:, 1], QRS_index[:, 2] = detectPK(signal_filtered, diff, QRS_index)
+PKa, PKb, QRS_index[:, 1], QRS_index[:, 2] = detectPK(signal_filtered, diff, QRS_index, fs, R_peaks)
+QRS_index = np.delete(QRS_index, 0, 0)
+QRS_index = np.delete(QRS_index, len(QRS_index[:, 1]) - 1, 0)
+
    
 # Fazer um loop para achar o primeiro ponto de mínimo antes e depois do Qp e Sp, respectivamente
+#aux = 0,06 ms
+aux = int(fs * 0.5)
+
+N = 5
+cumsum, movav_diff = [0], []
+
+for i, x in enumerate(diff, 1):
+    cumsum.append(cumsum[i-1] + x)
+    if i>=N:
+        moving_ave = (cumsum[i] - cumsum[i-N])/N
+        #can do stuff with moving_ave here
+        movav_diff.append(moving_ave)
+
+
 PKQ = np.zeros(len(QRS_index[:, 1]))
 count = 0
 for i in QRS_index[:, 1]:
-    aux = 20
+    #aux = 20
     PKQ_init = detect_peaks([4, 4, 4], valley = True)
+    i = i - N
     #while PKQ_init.size == 0:
     wdw_min = i - aux
-    PKQ_init = detect_peaks(diff[wdw_min:i], valley = True)
+    PKQ_init = detect_peaks(movav_diff[wdw_min:i], valley = True)
     #aux += 1
     
     PKQ[count] = PKQ_init[len(PKQ_init)-1] + i - aux
@@ -303,10 +583,11 @@ for i in QRS_index[:, 1]:
 PKS = np.zeros(len(QRS_index[:, 3]))
 count = 0    
 for i in QRS_index[:, 3]:
-    aux = 20
+    #aux = 40
+    i = i-N
     PKS_init = detect_peaks([4, 4, 4], valley = True)
     wdw_max = i + aux
-    PKS_init = detect_peaks(diff[i:wdw_max], valley = True)
+    PKS_init = detect_peaks(movav_diff[i:wdw_max], valley = True)
     PKS[count] = PKS_init[0] + i
     count += 1
     
@@ -332,44 +613,104 @@ if min(fdiff) < 0:
     THS = THS + min(fdiff)
     
 # Verificando o ponto que cruza o Threshold
-QRS_onset = QRS_onset_end (diff, THQ, 25, PKQ, len(QRS_index[:, 2]), onset = True)
-QRS_end = QRS_onset_end (diff, THS, 15, PKS, len(QRS_index[:, 2]), onset = False)
+QRS_onset = QRS_onset_end (diff, THQ, 25, PKQ, len(QRS_index[:, 2]), fs, onset = True)
+QRS_end = QRS_onset_end (diff, THS, 15, PKS, len(QRS_index[:, 2]), fs, onset = False)
 
 QRS_index[:, 0] = QRS_onset - 1
 QRS_index[:, 4] = QRS_end - 1
 
-QRS_data = pd.DataFrame(data = QRS_index, columns = ['Q_onset', 'Q_peak', 'R_peak', 'S_peak', 'S_end'])
+misDect, annMisDect_idx, discard, beat_num = misDetect(QRS_index, a_idx)
+QRS_index = np.delete(QRS_index, discard, 0)
+QRS_index[:, 5] = np.transpose(np.array(beat_num))
 
+QRS_data = pd.DataFrame(data = QRS_index, columns = ['Q_onset', 'Q_peak', 'R_peak', 'S_peak', 'S_end',
+                                                     'Beat_nº'])
 
-QRS_times = np.zeros((len(R_peaks) - 1, 5), float)
+QRS_times = np.zeros((len(QRS_index[:, 2]), 8), float)
 
 # Encontrando os intervalos Q-R
-for i, j, k in zip(QRS_index[1:, 2], QRS_index[1:, 1], range(0, len(QRS_index[1:, 2]))):
+for i, j, k in zip(QRS_index[:, 2], QRS_index[:, 1], range(0, len(QRS_index[:, 2]))):
     QRS_times[k, 0] = signal[i, 0] - signal[j, 0]
     
 # Encontrando os intervalos Q-S
-for i, j, k in zip(QRS_index[1:, 3], QRS_index[1:, 1], range(0, len(QRS_index[1:, 2]))):
+for i, j, k in zip(QRS_index[:, 3], QRS_index[:, 1], range(0, len(QRS_index[:, 2]))):
     QRS_times[k, 1] = signal[i, 0] - signal[j, 0]
     
 # Encontrando os intervalos R-R
-for i, j, k in zip(QRS_index[1:, 2], QRS_index[:-1, 2], range(0, len(QRS_index[1:, 2]))):
-    QRS_times[k, 2] = signal[i, 0] - signal[j, 0]
+for i, j in zip(QRS_index[:, 2], range(0, len(QRS_index[:, 2]))):
+    if(j == 0):
+        QRS_times[j, 2] = signal[QRS_index[j+1, 2], 0] - signal[i, 0]
+        QRS_times[j, 2] /= QRS_index[j+1, 5] - QRS_index[j, 5]
+    else:  
+       QRS_times[j, 2] = signal[i, 0] - signal[QRS_index[j-1, 2], 0]
+       QRS_times[j, 2] /= QRS_index[j, 5] - QRS_index[j-1, 5]
 
 # Encontrando os intervalos R-S
-for i, j, k in zip(QRS_index[1:, 2], QRS_index[1:, 3], range(0, len(QRS_index[1:, 2]))):
+for i, j, k in zip(QRS_index[:, 3], QRS_index[:, 2], range(0, len(QRS_index[:, 2]))):
     QRS_times[k, 3] = signal[i, 0] - signal[j, 0]
 
 # Encontrando o intervalo Q_onset - S_end
-for i, j, k in zip(QRS_index[1:, 0], QRS_index[1:, 4], range(0, len(QRS_index[1:, 2]))):
+for i, j, k in zip(QRS_index[:, 4], QRS_index[:, 0], range(0, len(QRS_index[:, 2]))):
     QRS_times[k, 4] = signal[i, 0] - signal[j, 0]
     
-ann_sym = pd.DataFrame(data = np.transpose(a_sym[1:]), columns = ['Ann'])
-
+for i, j, k, l in zip(QRS_index[:, 1], QRS_index[:, 2], QRS_index[:, 3], range(0, len(QRS_index[:, 2]))):
+    QRS_times[l, 5] = signal_filtered[i]
+    QRS_times[l, 6] = signal_filtered[j]
+    QRS_times[l, 7] = signal_filtered[k]
+    
+#ann_sym = pd.DataFrame(data = np.transpose(a_sym[1:]), columns = ['Ann'])
+firstAnnIdx = firstAnn(QRS_index, a_idx)
+ann_sym = a_sym[firstAnnIdx:-1]
+ann_sym = np.delete(ann_sym, annMisDect_idx, 0)
+ann_sym = pd.DataFrame(data = np.transpose(ann_sym), columns = ['Ann'])
+ds_beat = pd.DataFrame(data = np.transpose(beat_num), columns = ['Beat_nº'])
+vect = [2, 4, 6, 7]
      
-QRS_timesData = pd.DataFrame(data = QRS_times, columns = ['Q-R', 'Q-S', 'R-R', 'R-S', 'QRS_len'])
+
+#QRS_timesData = pd.DataFrame(data = QRS_times, columns = ['Q-R', 'Q-S', 'R-R', 'R-S', 'QRS_len', 'Q', 'R', 'S'])
+QRS_timesData = pd.DataFrame(data = QRS_times[:, vect], columns = ['R-R', 'QRS_len', 'R', 'S'])
 QRS_timesData = QRS_timesData.join(ann_sym)
+QRS_timesData = QRS_timesData.join(ds_beat)
 
 
+
+
+# ******************************* CLASSIFICATION ***************************
+
+X = QRS_timesData.iloc[:, 0:4].values
+y = QRS_timesData.iloc[:, 4].values
+
+from sklearn.preprocessing import LabelEncoder
+labelencoder_y = LabelEncoder()
+y = labelencoder_y.fit_transform(y.astype(str))
+
+from sklearn.cross_validation import train_test_split
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.25, random_state = 0)
+
+# Feature Scaling
+from sklearn.preprocessing import StandardScaler
+sc = StandardScaler()
+X_train = sc.fit_transform(X_train)
+X_test = sc.transform(X_test)
+
+# Fitting the classifier to the Training set
+from sklearn.svm import SVC
+classifier = SVC(kernel = 'rbf')
+classifier.fit(X_train, y_train)
+classifier.score(X_test, y_test)
+
+# Predicting the Test set results
+y_pred = classifier.predict(X_test)
+
+# Making the Confusion Matrix
+from sklearn.metrics import confusion_matrix
+cm = confusion_matrix(y_test, y_pred)
+
+from sklearn.metrics import accuracy_score
+acc_s = accuracy_score(y_test, y_pred)
+
+from sklearn.metrics import classification_report
+report = classification_report(y_test, y_pred)
 # *************** PLOTs **********************
 
 # Plota FFT do sinal original e filtrado
@@ -455,9 +796,28 @@ plt.plot(signal[QRS_data['S_end'], 0], signal_filtered[QRS_data['S_end']], 'ro',
 plt.legend(loc='upper right')
 
 
+plt.figure(8)
+plt.plot(signal[:-1, 0], diff, label = 'Sinal Derivado')
+plt.plot(signal[:-5, 0], movav_diff, label = 'Sinal Derivado')
+
+plt.figure(12)
+plt.plot(signal[:, 0], signal_filtered, label = 'Sinal Filtrado') 
+plt.plot(signal[QRS_data['R_peak'], 0], signal_filtered[QRS_data['R_peak']], 'ro', color = 'orange', 
+         label = 'Minhas detecções')
+plt.plot(signal[a_sync[annMisDect_idx], 0], signal_filtered[a_sync[annMisDect_idx]], 'ro', color = 'red', 
+         label = 'detecções erradas')
+plt.plot(signal[a_sync[:], 0], signal_filtered[a_sync[:]] + 0.1, 'ro', color = 'black', 
+         label = 'detecções originais')
+
+plt.plot(signal[QRS_index[discard, 2], 0], signal_filtered[QRS_index[discard, 2]], 'ro', color = 'yellow', 
+         label = 'detecções descartadas')
+plt.legend(loc='upper right')
+
+
+
 # Falta:
 # [X] Arrumar um jeito melhor de pegar o sinal
-# [X] Pré processar o sinal (tá com muito ruído)
+# [X] Pré processar o sinal
 # [ ] Feature extraction
 #   [X] TEO
 #   [X] Fazer convolução com a janela
@@ -471,6 +831,8 @@ plt.legend(loc='upper right')
 #   [X] Medir o tempo entre Q-S
 #   [X] Medir o tempo entre R-R (anterior)
 #   [X] Medir o tempo de início e fim do QRS
-# [ ] Pegar as anotações do sinal
+#   [X] Verificar quantos e quais ondas R não foram classificadas corretamente
+# [X] Pegar as anotações do sinal
 # [ ] Classificar
+#   [ ] Análise de Revância (acima de 5%)
 # [ ] Analisar resultados
