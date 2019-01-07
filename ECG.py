@@ -213,12 +213,15 @@ def misDetect(QRS_index, a_idx):
         if(dif > 6):
             misdecs += 1
             misdecs_idx.append(int(idx_a))
+            print([i, idx_a])
             if(correspond(QRS_index, a_idx1, i)):
                 i -= 1
             else:
                 discard.append(int(i))
         else:
             beat_num.append(int(idx_a))
+        if idx_a == (len(a_idx1) - 1):
+            break
         idx_a += 1
         i += 1
     return misdecs, misdecs_idx, discard, beat_num
@@ -229,11 +232,29 @@ def correspond(QRS_index, a_idx1, idx):
     for i in range(idx, len(a_idx1[:])):
         dif = abs(QRS_index[idx, 2] - a_idx1[i])
         if(dif <= 6):
+            print(i)
             aux += 1
     if(aux > 0):
         corr = True
     return corr
 
+def janelaSinal(signal_TEO_windowed, fs):
+    samples = fs * 40
+    leng = (len(signal_TEO_windowed) // samples) + 1
+    signal_windows = np.zeros((samples, leng), dtype = int)
+    
+    c = 0
+    r = 0
+    for i in range(0, len(signal_TEO_windowed)):
+        if ((i % samples) == 0) and i >= samples:
+            c += 1
+            r = 0
+        signal_windows[r, c] = i
+        r += 1
+    if signal_windows[:, -1].all() == False:
+        signal_windows = np.delete(signal_windows, len(signal_windows[1, :]) - 1, axis = 1)
+    return signal_windows
+'''
 def classifica(sig_name):
     
     signal, fs, T, n_samples = read_signal(sig_name, time = 1800)
@@ -464,8 +485,31 @@ def classifica(sig_name):
     
     
     return cm, acc_s, report
-
-
+'''
+def rmBeats(R_peaks_init, signal_TEO_windowed, signal):
+    R_peaks = []
+    i_aux = 0
+    while i_aux < (len(R_peaks_init) -1):
+        dist = signal[R_peaks_init[i_aux+1], 0] - signal[R_peaks_init[i_aux], 0]
+        if(dist >= 0.45):
+            R_peaks.append(R_peaks_init[i_aux])
+        else:
+            sub = signal_TEO_windowed[R_peaks_init[i_aux]] - signal_TEO_windowed[R_peaks_init[i_aux+1]]
+            if sub > 0:
+                R_peaks.append(R_peaks_init[i_aux])   
+            else:
+                R_peaks.append(R_peaks_init[i_aux+1])
+            i_aux += 1  
+        i_aux += 1        
+    i_aux = 0
+    cont = 0
+    while i_aux < (len(R_peaks) - 1):
+        dist = signal[R_peaks[i_aux+1], 0] - signal[R_peaks[i_aux], 0]
+        if dist <= 0.45:
+            cont += 1
+        i_aux += 1
+    
+    return R_peaks, cont
 
 
 #  ****************************** FAZER UM VETOR DE POSIÇÕES ÚTEIS DE ANOTAÇÕES *************************
@@ -474,7 +518,7 @@ def classifica(sig_name):
 
         
 # Lê o sinal e as anotações
-sig_name = '107'
+sig_name = '108'
 
 #cm, acc, rep = classifica(sig_name)
 
@@ -483,6 +527,16 @@ ann = wfdb.rdann(sig_name, 'atr', sampto = n_samples)
 a = ann.symbol
 a1 = np.array( [ann.symbol, ann.sample])
 a1 = np.transpose(a1)
+ann_del = []
+for i in range(0, len(a1) - 1):
+    if ((a1[i, 0] == '~') or (a1[i, 0] == '+') or (a1[i, 0] == 'x') or (a1[i, 0] == '!') or (a1[i, 0] == '|')
+    or (a1[i, 0] == '^') or (a1[i, 0] == '=') or (a1[i, 0] == '"') or (a1[i, 0] == '~')):
+        ann_del.append(i)
+a1 = np.delete(a1, ann_del, axis = 0)        
+
+        
+            
+
 a_idx = a1[:, 1].astype(int)
 a_sym = a1[:, 0].astype(str)
 
@@ -507,35 +561,45 @@ window = np.bartlett(9)
 signal_TEO_windowed = fftconvolve(signal_TEO, window, mode='same')
 
 # Define o threshold de detecção de pico como média do sinal + desvio padrão
-hist = np.histogram(signal_TEO_windowed)
-th = hist[1]
-th = th[2]
-#th = np.mean(signal_TEO_windowed) + np.std(signal_TEO_windowed)
+signal_windows = janelaSinal(signal_TEO_windowed, fs)
+hist = []
+for i in np.transpose(signal_windows):
+    hist.append(np.histogram(signal_TEO_windowed[i[0]:i[-1]]))
+
+th = []
+for i in np.transpose(signal_windows):
+    th.append(np.mean(signal_TEO_windowed[i[0]:i[-1]]) + 1.5 * np.std(signal_TEO_windowed[i[0]:i[-1]]))
+
+'''
+for i in hist:
+    aux = i[1]
+    #sub = aux[3] - aux[2]
+    #sub = aux[2] + (sub / 2)
+    sub = aux[2]
+    th.append(sub)
+'''
 
 # Detecta os picos R
-R_peaks_init = detect_peaks(signal_TEO_windowed, mph = th) #- 1
+R_peaks_init = []
+aux = 0
+for i, j in zip(np.transpose(signal_windows), range(0, len(th))):
+    R_peaks_vect = detect_peaks(signal_TEO_windowed[i[0]:i[-1]], mph = th[j])
+    for k in R_peaks_vect:
+        R_peaks_init.append(k + aux)
+    aux = i[-1]
+
+#R_peaks_init = detect_peaks(signal_TEO_windowed, mph = th) #- 1
 
 # Faz a derivada do sinal
 diff = np.diff(signal_filtered)
 diff_mean = np.mean(diff) - np.std(diff)
 
 # ******************* EXCLUIR ONDAS R QUE ESTEJAM A MENOS DE 0.5 s UMA DA OUTRA *******************
-R_peaks = []
-
-i_aux = 0
-while i_aux < (len(R_peaks_init) -1):
-    dist = signal[R_peaks_init[i_aux+1], 0] - signal[R_peaks_init[i_aux], 0]
-    if(dist >= 0.4):
-        R_peaks.append(R_peaks_init[i_aux])
-    else:
-        sub = signal_TEO_windowed[R_peaks_init[i_aux]] - signal_TEO_windowed[R_peaks_init[i_aux+1]]
-        if sub > 0:
-            R_peaks.append(R_peaks_init[i_aux])
-        else:
-            R_peaks.append(R_peaks_init[i_aux+1])
-        i_aux += 1
-    i_aux += 1            
-        
+    
+R_peaks, cont = rmBeats(R_peaks_init, signal_TEO_windowed, signal)
+while cont != 0:
+    R_peaks, cont = rmBeats(R_peaks, signal_TEO_windowed, signal)
+    
 R_peaks.append(R_peaks_init[len(R_peaks_init) - 1])
         
 
@@ -717,7 +781,8 @@ report = classification_report(y_test, y_pred)
 plot_fft()
 
 # Plota o sinal original e filtrado
-plot_signals(signal_filtered, signal[:, 1], lb1 = 'filtrado', lb2 = 'raw', mean = False, both = True, fig = 2 )
+plot_signals(signal_filtered, signal[:, 1], lb1 = 'filtrado', lb2 = 'raw', mean = False, both = True, 
+             fig = 2 )
 
 # Plota o TEO original do sinal e o TEO convoluído com a janela de Bartlett
 plot_signals(signal_TEO, signal_TEO_windowed, lb1 = 'TEO ECG', lb2 = 'TEO ECG + Window', both = True, fig = 3)
@@ -725,8 +790,10 @@ plot_signals(signal_TEO, signal_TEO_windowed, lb1 = 'TEO ECG', lb2 = 'TEO ECG + 
 # Plota o TEO convoluído com a média para detecção de pico e os picos
 plt.figure(4)
 plot_signals(signal_TEO_windowed, lb1 = 'TEO output convolved with Bartlett Window', fig = 4)
-plt.axhline(th, color = 'red', linewidth = 2)
-plt.scatter(signal[R_peaks, 0], signal_TEO_windowed[R_peaks], color = 'red')
+for i, j in zip(np.transpose(signal_windows), range(0, len(th))):
+    plt.plot(signal[i[0]:i[-1], 0], np.repeat(th[j], len(i) - 1), color = 'red')
+#plt.axhline(th, color = 'red', linewidth = 2)
+plt.scatter(signal[R_peaks, 0], signal_TEO_windowed[R_peaks], color = 'black')
 
 # Plota o sinal derivado com o QRS detectado
 plt.figure(5)
@@ -741,8 +808,8 @@ plt.figure(6)
 plt.clf()
 plt.plot(signal[:, 0], signal_filtered, color = 'blue', label = 'ECG Filtrado')
 plt.plot(signal[QRS_index[:, 2] , 0], signal_filtered[QRS_index[:, 2]], 'ro', color = 'black', label = 'R')
-plt.plot(signal[ QRS_index[:, 3] , 0], signal_filtered[QRS_index[:, 3]], 'ro', color = 'green', label = 'S')
-plt.plot(signal[ QRS_index[:, 1] , 0], signal_filtered[QRS_index[:, 1]], 'ro', color = 'red', label = 'Q')
+#plt.plot(signal[ QRS_index[:, 3] , 0], signal_filtered[QRS_index[:, 3]], 'ro', color = 'green', label = 'S')
+#plt.plot(signal[ QRS_index[:, 1] , 0], signal_filtered[QRS_index[:, 1]], 'ro', color = 'red', label = 'Q')
 plt.legend(loc='upper right')
 plt.xlabel("seconds")
 plt.ylabel("mV")
@@ -821,7 +888,8 @@ plt.legend(loc='upper right')
 # [ ] Feature extraction
 #   [X] TEO
 #   [X] Fazer convolução com a janela
-#   [X] Definir Threshold p/ os picos
+#   [X] Janelar o sinal TEO
+#   [X] Definir Threshold p/ os picos p/ cada janela
 #   [X] Detectar as ondas R
 #   [X] Detectar os picos Q e S
 #   [X] Remover falsas ondas R
@@ -833,6 +901,9 @@ plt.legend(loc='upper right')
 #   [X] Medir o tempo de início e fim do QRS
 #   [X] Verificar quantos e quais ondas R não foram classificadas corretamente
 # [X] Pegar as anotações do sinal
-# [ ] Classificar
-#   [ ] Análise de Revância (acima de 5%)
-# [ ] Analisar resultados
+# [ ] Separar os beats por tipo
+# [ ] Classificar (por tipo)
+# [ ] Analisar resultados por tipo
+# [ ] Calcular acurácia
+# [ ] Calcular sensibilidade
+# [ ] Calcular precisão
