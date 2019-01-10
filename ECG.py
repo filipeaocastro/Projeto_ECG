@@ -165,6 +165,9 @@ def detectPK(signal_filtered, diff, QRS_index, fs, R_peaks):
                 break    
         
         for j in range(QRS_index[i, 2], QRS_index[i, 2] + samples):
+            if j + 2 >= len(diff):
+                PKb[i] = j+1
+                break
             pico = np.zeros(1)
             pico = detect_peaks( (diff[j], diff[j+1], diff[j+2]) )
             if pico != 0:
@@ -198,6 +201,36 @@ def firstAnn(QRS_index, a_idx):
             break
     return int(aux)
 
+def NOVOmisDetect(QRS_index, a_idx):
+    
+    misdecs_idx = []    # Indexes de ondas R (nas anotações) não detectadas corretamente
+    discard = []        # Indexes do QRS_index que devem ser descartados
+    beat_num = []       # Vetor p/ armazenar o número de cada beat
+    sync_beats = []     # Vetor p/ armazenar os beats detectados corretamente
+    misdecs = 0.0         # Quantidade de misdetections
+    
+    
+    for i in range(0, len(QRS_index[:, 2])):
+        isCorr, corr_idx = correspond(QRS_index, a_idx, i)
+        if isCorr:
+            sync_beats.append(i)
+            beat_num.append(corr_idx)
+        else:
+            discard.append(i)
+    
+    
+    for i in range(0, len(a_idx)):
+        aux = 0
+        for j in beat_num:
+            if a_idx[i] == a_idx[j]:
+                aux += 1
+                break
+        if aux == 0:
+            misdecs_idx.append(i)
+    misdecs = len(misdecs_idx) / len(a_idx)
+    
+    return misdecs_idx, discard, beat_num, sync_beats, misdecs
+
 def misDetect(QRS_index, a_idx):
     
     misdecs = 0         # Quantidade de misdetections
@@ -228,15 +261,18 @@ def misDetect(QRS_index, a_idx):
         
 def correspond(QRS_index, a_idx1, idx):
     aux = 0
+    corr_idx = int(0)
     corr = False
     for i in range(idx, len(a_idx1[:])):
         dif = abs(QRS_index[idx, 2] - a_idx1[i])
         if(dif <= 6):
-            print(i)
+           # print(i)
             aux += 1
+            corr_idx = int(i)
+            break
     if(aux > 0):
         corr = True
-    return corr
+    return corr, corr_idx
 
 def janelaSinal(signal_TEO_windowed, fs):
     samples = fs * 40
@@ -254,21 +290,25 @@ def janelaSinal(signal_TEO_windowed, fs):
     if signal_windows[:, -1].all() == False:
         signal_windows = np.delete(signal_windows, len(signal_windows[1, :]) - 1, axis = 1)
     return signal_windows
-'''
+
 def classifica(sig_name):
     
     signal, fs, T, n_samples = read_signal(sig_name, time = 1800)
     ann = wfdb.rdann(sig_name, 'atr', sampto = n_samples)
-    a = ann.symbol
     a1 = np.array( [ann.symbol, ann.sample])
     a1 = np.transpose(a1)
+    ann_del = []
+    for i in range(0, len(a1) - 1):
+        if ((a1[i, 0] == '~') or (a1[i, 0] == '+') or (a1[i, 0] == 'x') or (a1[i, 0] == '!') or (a1[i, 0] == '|')
+        or (a1[i, 0] == '^') or (a1[i, 0] == '=') or (a1[i, 0] == '"') or (a1[i, 0] == '~')):
+            ann_del.append(i)
+    a1 = np.delete(a1, ann_del, axis = 0)        
+    
+            
+                
+    
     a_idx = a1[:, 1].astype(int)
     a_sym = a1[:, 0].astype(str)
-    
-    x = []
-    for i in a_sym:
-        if i == '<':
-          x.append(i)  
     
     
     # Define as frequências de corte do filtro
@@ -277,7 +317,7 @@ def classifica(sig_name):
     
     # Filtra o sinal
     signal_filtered = butter_bandpass_filter(signal[:,1], lowcut, highcut, fs, order = 2)
-    signal_detrended = detrend(signal_filtered)
+    #signal_detrended = detrend(signal_filtered)
     
     # Faz o TEO do sinal ECG
     signal_TEO = np.zeros(shape = len(signal_filtered))
@@ -291,22 +331,45 @@ def classifica(sig_name):
     signal_TEO_windowed = fftconvolve(signal_TEO, window, mode='same')
     
     # Define o threshold de detecção de pico como média do sinal + desvio padrão
-    th = np.mean(signal_TEO_windowed) + np.std(signal_TEO_windowed)
+    signal_windows = janelaSinal(signal_TEO_windowed, fs)
+    hist = []
+    for i in np.transpose(signal_windows):
+        hist.append(np.histogram(signal_TEO_windowed[i[0]:i[-1]]))
+    
+    th = []
+    for i in np.transpose(signal_windows):
+        th.append(np.mean(signal_TEO_windowed[i[0]:i[-1]]) + 1.5 * np.std(signal_TEO_windowed[i[0]:i[-1]]))
+    
+    '''
+    for i in hist:
+        aux = i[1]
+        #sub = aux[3] - aux[2]
+        #sub = aux[2] + (sub / 2)
+        sub = aux[2]
+        th.append(sub)
+    '''
     
     # Detecta os picos R
-    R_peaks_init = detect_peaks(signal_TEO_windowed, mph = th) #- 1
+    R_peaks_init = []
+    aux = 0
+    for i, j in zip(np.transpose(signal_windows), range(0, len(th))):
+        R_peaks_vect = detect_peaks(signal_TEO_windowed[i[0]:i[-1]], mph = th[j])
+        for k in R_peaks_vect:
+            R_peaks_init.append(k + aux)
+        aux = i[-1]
+    
+    #R_peaks_init = detect_peaks(signal_TEO_windowed, mph = th) #- 1
     
     # Faz a derivada do sinal
     diff = np.diff(signal_filtered)
-    diff_mean = np.mean(diff) - np.std(diff)
+    #diff_mean = np.mean(diff) - np.std(diff)
     
     # ******************* EXCLUIR ONDAS R QUE ESTEJAM A MENOS DE 0.5 s UMA DA OUTRA *******************
-    R_peaks = []
-    
-    for i in range(0, len(R_peaks_init) -1):
-        dist = signal[R_peaks_init[i+1], 0] - signal[R_peaks_init[i], 0]
-        if(dist >= 0.4):
-            R_peaks.append(R_peaks_init[i])
+        
+    R_peaks, cont = rmBeats(R_peaks_init, signal_TEO_windowed, signal)
+    while cont != 0:
+        R_peaks, cont = rmBeats(R_peaks, signal_TEO_windowed, signal)
+        
     R_peaks.append(R_peaks_init[len(R_peaks_init) - 1])
             
     
@@ -314,7 +377,7 @@ def classifica(sig_name):
     QRS_index = np.zeros((len(R_peaks), 6), dtype = int)
     QRS_index[:, 2] = R_peaks[:]
     
-    samples = int(fs * 0.150) # Pega o número de amostras em 150 ms
+    #samples = int(fs * 0.150) # Pega o número de amostras em 150 ms
     
     
     PKa, PKb, QRS_index[:, 1], QRS_index[:, 2] = detectPK(signal_filtered, diff, QRS_index, fs, R_peaks)
@@ -390,12 +453,14 @@ def classifica(sig_name):
     QRS_index[:, 0] = QRS_onset - 1
     QRS_index[:, 4] = QRS_end - 1
     
-    misDect, annMisDect_idx, discard, beat_num = misDetect(QRS_index, a_idx)
+    #misDect, annMisDect_idx, discard, beat_num = misDetect(QRS_index, a_idx)
+    misdecs_idx, discard, beat_num, sync_beats, misdecs = NOVOmisDetect(QRS_index, a_idx)
+    
     QRS_index = np.delete(QRS_index, discard, 0)
     QRS_index[:, 5] = np.transpose(np.array(beat_num))
     
     QRS_data = pd.DataFrame(data = QRS_index, columns = ['Q_onset', 'Q_peak', 'R_peak', 'S_peak', 'S_end',
-                                                         'Beat_nº'])
+                                                        'Beat_nº'])
     
     QRS_times = np.zeros((len(QRS_index[:, 2]), 8), float)
     
@@ -430,9 +495,9 @@ def classifica(sig_name):
         QRS_times[l, 7] = signal_filtered[k]
         
     #ann_sym = pd.DataFrame(data = np.transpose(a_sym[1:]), columns = ['Ann'])
-    firstAnnIdx = firstAnn(QRS_index, a_idx)
-    ann_sym = a_sym[firstAnnIdx:-1]
-    ann_sym = np.delete(ann_sym, annMisDect_idx, 0)
+    #firstAnnIdx = firstAnn(QRS_index, a_idx)
+    #ann_sym = a_sym[firstAnnIdx:-1]
+    ann_sym = np.delete(a_sym, misdecs_idx, 0)
     ann_sym = pd.DataFrame(data = np.transpose(ann_sym), columns = ['Ann'])
     ds_beat = pd.DataFrame(data = np.transpose(beat_num), columns = ['Beat_nº'])
     vect = [2, 4, 6, 7]
@@ -442,6 +507,8 @@ def classifica(sig_name):
     QRS_timesData = pd.DataFrame(data = QRS_times[:, vect], columns = ['R-R', 'QRS_len', 'R', 'S'])
     QRS_timesData = QRS_timesData.join(ann_sym)
     QRS_timesData = QRS_timesData.join(ds_beat)
+    
+    return QRS_timesData
     
     
     
@@ -468,7 +535,7 @@ def classifica(sig_name):
     from sklearn.svm import SVC
     classifier = SVC(kernel = 'rbf')
     classifier.fit(X_train, y_train)
-    score = classifier.score(X_test, y_test)
+    classifier.score(X_test, y_test)
     
     # Predicting the Test set results
     y_pred = classifier.predict(X_test)
@@ -484,14 +551,14 @@ def classifica(sig_name):
     report = classification_report(y_test, y_pred)
     
     
-    return cm, acc_s, report
-'''
+    return cm, acc_s, report, misdecs, 
+
 def rmBeats(R_peaks_init, signal_TEO_windowed, signal):
     R_peaks = []
     i_aux = 0
     while i_aux < (len(R_peaks_init) -1):
         dist = signal[R_peaks_init[i_aux+1], 0] - signal[R_peaks_init[i_aux], 0]
-        if(dist >= 0.45):
+        if(dist >= 0.35):
             R_peaks.append(R_peaks_init[i_aux])
         else:
             sub = signal_TEO_windowed[R_peaks_init[i_aux]] - signal_TEO_windowed[R_peaks_init[i_aux+1]]
@@ -505,7 +572,7 @@ def rmBeats(R_peaks_init, signal_TEO_windowed, signal):
     cont = 0
     while i_aux < (len(R_peaks) - 1):
         dist = signal[R_peaks[i_aux+1], 0] - signal[R_peaks[i_aux], 0]
-        if dist <= 0.45:
+        if dist <= 0.35:
             cont += 1
         i_aux += 1
     
@@ -518,9 +585,9 @@ def rmBeats(R_peaks_init, signal_TEO_windowed, signal):
 
         
 # Lê o sinal e as anotações
-sig_name = '108'
+sig_name = '212'
 
-#cm, acc, rep = classifica(sig_name)
+cm, acc, rep, misdecs = classifica(sig_name)
 
 signal, fs, T, n_samples = read_signal(sig_name, time = 1800)
 ann = wfdb.rdann(sig_name, 'atr', sampto = n_samples)
@@ -683,7 +750,9 @@ QRS_end = QRS_onset_end (diff, THS, 15, PKS, len(QRS_index[:, 2]), fs, onset = F
 QRS_index[:, 0] = QRS_onset - 1
 QRS_index[:, 4] = QRS_end - 1
 
-misDect, annMisDect_idx, discard, beat_num = misDetect(QRS_index, a_idx)
+#misDect, annMisDect_idx, discard, beat_num = misDetect(QRS_index, a_idx)
+misdecs_idx, discard, beat_num, sync_beats, misdecs = NOVOmisDetect(QRS_index, a_idx)
+
 QRS_index = np.delete(QRS_index, discard, 0)
 QRS_index[:, 5] = np.transpose(np.array(beat_num))
 
