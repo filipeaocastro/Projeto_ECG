@@ -8,14 +8,11 @@ Created on Tue Oct 23 16:18:20 2018
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
-import csv
-from scipy.signal import welch
 from scipy.fftpack import fft
-import sys
 import wfdb
-import array as arr
 from scipy.signal import butter, lfilter, detrend, fftconvolve
 from detect_peaks import detect_peaks
+from sklearn.utils import shuffle   
 
 #import dspplot
 
@@ -291,7 +288,7 @@ def janelaSinal(signal_TEO_windowed, fs):
         signal_windows = np.delete(signal_windows, len(signal_windows[1, :]) - 1, axis = 1)
     return signal_windows
 
-def classifica(sig_name):
+def ftExtraction(sig_name, returnAll = False):
     
     signal, fs, T, n_samples = read_signal(sig_name, time = 1800)
     ann = wfdb.rdann(sig_name, 'atr', sampto = n_samples)
@@ -508,13 +505,18 @@ def classifica(sig_name):
     QRS_timesData = QRS_timesData.join(ann_sym)
     QRS_timesData = QRS_timesData.join(ds_beat)
     
-    return QRS_timesData
+    if returnAll:
+        return (QRS_timesData, signal, signal_filtered, signal_TEO, signal_TEO_windowed, signal_windows, th, R_peaks,
+                diff, PKb, PKa, QRS_index, PKQ, THQ, PKS, THS, QRS_onset, QRS_end, QRS_data, movav_diff,
+                discard)
+    else:
+        return QRS_timesData
     
     
     
     
     # ******************************* CLASSIFICATION ***************************
-    
+def classifica(QRS_timesData):
     X = QRS_timesData.iloc[:, 0:4].values
     y = QRS_timesData.iloc[:, 4].values
     
@@ -523,7 +525,7 @@ def classifica(sig_name):
     y = labelencoder_y.fit_transform(y.astype(str))
     
     from sklearn.cross_validation import train_test_split
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.25, random_state = 0)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.7, random_state = 0)
     
     # Feature Scaling
     from sklearn.preprocessing import StandardScaler
@@ -551,7 +553,37 @@ def classifica(sig_name):
     report = classification_report(y_test, y_pred)
     
     
-    return cm, acc_s, report, misdecs, 
+    return cm, acc_s, report
+
+def classificaEsp(X_train, X_test, y_train, y_test):
+
+    # Feature Scaling
+    from sklearn.preprocessing import StandardScaler
+    sc = StandardScaler()
+    X_train = sc.fit_transform(X_train)
+    X_test = sc.transform(X_test)
+    
+    # Fitting the classifier to the Training set
+    from sklearn.svm import SVC
+    classifier = SVC(kernel = 'rbf')
+    classifier.fit(X_train, y_train)
+    classifier.score(X_test, y_test)
+    
+    # Predicting the Test set results
+    y_pred = classifier.predict(X_test)
+    
+    # Making the Confusion Matrix
+    from sklearn.metrics import confusion_matrix
+    cm = confusion_matrix(y_test, y_pred)
+    
+    from sklearn.metrics import accuracy_score
+    acc_s = accuracy_score(y_test, y_pred)
+    
+    from sklearn.metrics import classification_report
+    report = classification_report(y_test, y_pred)
+    
+    
+    return cm, acc_s, report
 
 def rmBeats(R_peaks_init, signal_TEO_windowed, signal):
     R_peaks = []
@@ -578,16 +610,86 @@ def rmBeats(R_peaks_init, signal_TEO_windowed, signal):
     
     return R_peaks, cont
 
+def makeSet(df, length, toLength = True):
+    if toLength:
+        newSet = pd.DataFrame(columns = ['R-R', 'QRS_len', 'R', 'S', 'Ann', 'Beat_nº'])
+        newSet = newSet.append(df.iloc[:length, :])
+    else:
+        newSet = pd.DataFrame(columns = ['R-R', 'QRS_len', 'R', 'S', 'Ann', 'Beat_nº'])
+        newSet = newSet.append(df.iloc[length:, :])
+    
+    return newSet
+
+def splitSet(df1, df2, df3, X_set = True):
+    
+    newSet = pd.DataFrame()
+    
+    if X_set:
+        newSet = newSet.append(df1.iloc[:, 0:4])
+        newSet = newSet.append(df2.iloc[:, 0:4])
+        newSet = newSet.append(df3.iloc[:, 0:4])
+        newSet = np.array(newSet.values)
+    else:
+        newSet = np.array(df1.iloc[:, 4].values)
+        newSet = np.concatenate([newSet, df2.iloc[:, 4].values])
+        newSet = np.concatenate([newSet, df3.iloc[:, 4].values])
+        from sklearn.preprocessing import LabelEncoder
+        labelencoder_y = LabelEncoder()
+        newSet = labelencoder_y.fit_transform(newSet.astype(str))
+    
+    return newSet
+
 
 #  ****************************** FAZER UM VETOR DE POSIÇÕES ÚTEIS DE ANOTAÇÕES *************************
     
+N_beats = pd.DataFrame(columns = ['R-R', 'QRS_len', 'R', 'S', 'Ann', 'Beat_nº'])
+R_beats = pd.DataFrame(columns = ['R-R', 'QRS_len', 'R', 'S', 'Ann', 'Beat_nº'])
+L_beats = pd.DataFrame(columns = ['R-R', 'QRS_len', 'R', 'S', 'Ann', 'Beat_nº'])
 
 
-        
+names = ['111', '214', '118', '212']   
 # Lê o sinal e as anotações
-sig_name = '212'
+for sig_name in names:
+    QRS_timesData1 = ftExtraction(sig_name)
+    for i in range(0, len(QRS_timesData1.iloc[:, 1])):
+        if QRS_timesData1.iloc[i, 4] == 'N':
+            N_beats = N_beats.append(QRS_timesData1.iloc[i, :])
+        if QRS_timesData1.iloc[i, 4] == 'R':
+            R_beats = R_beats.append(QRS_timesData1.iloc[i, :])
+        if QRS_timesData1.iloc[i, 4] == 'L':
+            L_beats = L_beats.append(QRS_timesData1.iloc[i, :])
+            
+    
+N_beats = shuffle(N_beats).reset_index(drop = True)
+L_beats = shuffle(L_beats).reset_index(drop = True)
+R_beats = shuffle(R_beats).reset_index(drop = True)
 
-cm, acc, rep, misdecs = classifica(sig_name)
+train_N = makeSet(N_beats, 150)
+train_R = makeSet(R_beats, 200)
+train_L = makeSet(L_beats, 200)
+X_trainSet = splitSet(train_N, train_R, train_L, X_set = True)
+y_trainSet = splitSet(train_N, train_R, train_L, X_set = False)
+
+test_N = makeSet(N_beats, 150, toLength = False)
+test_R = makeSet(R_beats, 200, toLength = False)
+test_L = makeSet(L_beats, 200, toLength = False)
+X_testSet = splitSet(test_N, test_R, test_L, X_set = True)
+y_testSet = splitSet(test_N, test_R, test_L, X_set = False)
+
+cm, acc_s, report = classificaEsp(X_trainSet, X_testSet, y_trainSet, y_testSet)
+            
+all_beats = pd.DataFrame()
+all_beats = all_beats.append(N_beats)
+all_beats = all_beats.append(R_beats)
+all_beats = all_beats.append(L_beats)
+df = shuffle(all_beats).reset_index(drop = True)    
+cm, acc, rep = classifica(QRS_timesData1)
+
+
+sig_name = '101'
+(QRS_timesData, signal, signal_filtered, signal_TEO, signal_TEO_windowed, signal_windows, th,
+ R_peaks, diff, PKb, PKa, QRS_index, PKQ, THQ, PKS, THS, QRS_onset, QRS_end, QRS_data, movav_diff, 
+ discard) = ftExtraction(sig_name, returnAll = True)
 
 signal, fs, T, n_samples = read_signal(sig_name, time = 1800)
 ann = wfdb.rdann(sig_name, 'atr', sampto = n_samples)
@@ -846,6 +948,8 @@ from sklearn.metrics import classification_report
 report = classification_report(y_test, y_pred)
 # *************** PLOTs **********************
 
+
+
 # Plota FFT do sinal original e filtrado
 plot_fft()
 
@@ -936,14 +1040,6 @@ plt.figure(8)
 plt.plot(signal[:-1, 0], diff, label = 'Sinal Derivado')
 plt.plot(signal[:-5, 0], movav_diff, label = 'Sinal Derivado')
 
-plt.figure(12)
-plt.plot(signal[:, 0], signal_filtered, label = 'Sinal Filtrado') 
-plt.plot(signal[QRS_data['R_peak'], 0], signal_filtered[QRS_data['R_peak']], 'ro', color = 'orange', 
-         label = 'Minhas detecções')
-plt.plot(signal[a_sync[annMisDect_idx], 0], signal_filtered[a_sync[annMisDect_idx]], 'ro', color = 'red', 
-         label = 'detecções erradas')
-plt.plot(signal[a_sync[:], 0], signal_filtered[a_sync[:]] + 0.1, 'ro', color = 'black', 
-         label = 'detecções originais')
 
 plt.plot(signal[QRS_index[discard, 2], 0], signal_filtered[QRS_index[discard, 2]], 'ro', color = 'yellow', 
          label = 'detecções descartadas')
