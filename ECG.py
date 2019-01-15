@@ -60,7 +60,7 @@ def plot_signals(sig1, sig2 = 0, both = False, lb1 = '', lb2 = '', mean = False,
     m1 = np.mean( np.abs(sig1))
     m2 = np.mean( np.abs(sig2))
     if both == False:
-        plt.plot(signal[:,0], sig1, color = 'orange', linewidth = 1, label = 'ECG ' + lb1)
+        plt.plot(signal[:,0], sig1, color = (0.2, 0.2, 0.2), linewidth = 1, label = lb1)
         plt.legend(loc='upper right')
         plt.xlabel("seconds")
         plt.ylabel("mV")
@@ -69,7 +69,7 @@ def plot_signals(sig1, sig2 = 0, both = False, lb1 = '', lb2 = '', mean = False,
         
     else:
         plt.subplot(211)
-        plt.plot(signal[:,0], sig1, color = 'orange', linewidth = 1, label = 'ECG ' + lb1)
+        plt.plot(signal[:,0], sig1, color = (0.2, 0.2, 0.2), linewidth = 1, label = lb1)
         plt.legend(loc='upper right')
         plt.xlabel("seconds")
         plt.ylabel("mV")
@@ -77,7 +77,7 @@ def plot_signals(sig1, sig2 = 0, both = False, lb1 = '', lb2 = '', mean = False,
             plt.axhline(m1, color = 'red', linewidth = 1.2, linestyle = '--')
         
         plt.subplot(212)
-        plt.plot(signal[:,0], sig2, color = 'blue', linewidth = 1, label = 'ECG ' + lb2)
+        plt.plot(signal[:,0], sig2, color = (0.2, 0.2, 0.2), linewidth = 1, label = lb2)
         plt.xlabel("seconds")
         plt.ylabel("mV")
         plt.legend(loc='upper right')
@@ -491,6 +491,7 @@ def ftExtraction(sig_name, returnAll = False):
         QRS_times[l, 6] = signal_filtered[j]
         QRS_times[l, 7] = signal_filtered[k]
         
+        
     #ann_sym = pd.DataFrame(data = np.transpose(a_sym[1:]), columns = ['Ann'])
     #firstAnnIdx = firstAnn(QRS_index, a_idx)
     #ann_sym = a_sym[firstAnnIdx:-1]
@@ -686,7 +687,7 @@ df = shuffle(all_beats).reset_index(drop = True)
 cm, acc, rep = classifica(QRS_timesData1)
 
 
-sig_name = '101'
+sig_name = '100'
 (QRS_timesData, signal, signal_filtered, signal_TEO, signal_TEO_windowed, signal_windows, th,
  R_peaks, diff, PKb, PKa, QRS_index, PKQ, THQ, PKS, THS, QRS_onset, QRS_end, QRS_data, movav_diff, 
  discard) = ftExtraction(sig_name, returnAll = True)
@@ -697,7 +698,7 @@ sig_name = '101'
 plot_fft()
 
 # Plota o sinal original e filtrado
-plot_signals(signal_filtered, signal[:, 1], lb1 = 'filtrado', lb2 = 'raw', mean = False, both = True, 
+plot_signals(signal[:, 1], signal_filtered , lb1 = 'Raw ECG', lb2 = 'Filtered ECG', mean = False, both = True, 
              fig = 2 )
 
 # Plota o TEO original do sinal e o TEO convoluído com a janela de Bartlett
@@ -706,6 +707,7 @@ plot_signals(signal_TEO, signal_TEO_windowed, lb1 = 'TEO ECG', lb2 = 'TEO ECG + 
 # Plota o TEO convoluído com a média para detecção de pico e os picos
 plt.figure(4)
 plot_signals(signal_TEO_windowed, lb1 = 'TEO output convolved with Bartlett Window', fig = 4)
+plt.plot
 for i, j in zip(np.transpose(signal_windows), range(0, len(th))):
     plt.plot(signal[i[0]:i[-1], 0], np.repeat(th[j], len(i) - 1), color = 'red')
 #plt.axhline(th, color = 'red', linewidth = 2)
@@ -765,17 +767,19 @@ plt.legend(loc='upper right')
 
 
 plt.figure(11)
-plt.plot(signal[:, 0], signal_filtered, label = 'Filtered Signal')
-plt.plot(signal[QRS_data['Q_onset'], 0], signal_filtered[QRS_data['Q_onset']], 'ro', color = 'yellow', 
+plt.plot(signal[:, 0], signal_filtered, label = 'Filtered Signal', color = (0.5, 0.5, 0.5), linewidth = 1.25)
+plt.plot(signal[QRS_data['Q_onset'], 0], signal_filtered[QRS_data['Q_onset']], '<', color = 'black', 
          label = 'Q onset')
-plt.plot(signal[QRS_data['Q_peak'], 0], signal_filtered[QRS_data['Q_peak']], 'ro', color = 'green', 
+plt.plot(signal[QRS_data['Q_peak'], 0], signal_filtered[QRS_data['Q_peak']], 'o', color = 'black', 
          label = 'Q peak')
-plt.plot(signal[QRS_data['R_peak'], 0], signal_filtered[QRS_data['R_peak']], 'ro', color = 'black', 
+plt.plot(signal[QRS_data['R_peak'], 0], signal_filtered[QRS_data['R_peak']], '^', color = 'black', 
          label = 'R peak')
-plt.plot(signal[QRS_data['S_peak'], 0], signal_filtered[QRS_data['S_peak']], 'ro', color = 'red', 
+plt.plot(signal[QRS_data['S_peak'], 0], signal_filtered[QRS_data['S_peak']], 's', color = 'black', 
          label = 'S peak')
-plt.plot(signal[QRS_data['S_end'], 0], signal_filtered[QRS_data['S_end']], 'ro', color = 'orange', 
+plt.plot(signal[QRS_data['S_end'], 0], signal_filtered[QRS_data['S_end']], '>', color = 'black', 
          label = 'S end')
+plt.xlabel("seconds")
+plt.ylabel("mV")
 plt.legend(loc='upper right')
 
 
@@ -788,6 +792,11 @@ plt.plot(signal[QRS_index[discard, 2], 0], signal_filtered[QRS_index[discard, 2]
          label = 'detecções descartadas')
 plt.legend(loc='upper right')
 
+
+plt.plot(signal[:,0], signal_TEO_windowed, color = (0.2, 0.2, 0.2), linewidth = 1.5, 
+         label = 'TEO output convolved with Bartlett Window')
+plt.legend(loc='upper right')
+plt.xlabel("seconds")
 
 
 # Falta:
