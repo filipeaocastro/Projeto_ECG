@@ -525,8 +525,8 @@ def classifica(QRS_timesData):
     labelencoder_y = LabelEncoder()
     y = labelencoder_y.fit_transform(y.astype(str))
     
-    from sklearn.cross_validation import train_test_split
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.7, random_state = 0)
+    from sklearn.model_selection import train_test_split
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.7)
     
     # Feature Scaling
     from sklearn.preprocessing import StandardScaler
@@ -683,8 +683,8 @@ all_beats = pd.DataFrame()
 all_beats = all_beats.append(N_beats)
 all_beats = all_beats.append(R_beats)
 all_beats = all_beats.append(L_beats)
-df = shuffle(all_beats).reset_index(drop = True)    
-cm, acc, rep = classifica(QRS_timesData1)
+df = shuffle(all_beats).reset_index(drop = True)     # Nem realmente precisa disso, mas ok
+cm, acc, rep = classifica(df)
 
 
 sig_name = '100'
